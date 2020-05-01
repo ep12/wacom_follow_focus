@@ -9,6 +9,12 @@ import sys
 import time
 from types import FrameType
 
+try:
+    import setproctitle
+    setproctitle.setproctitle('wacom_ff')
+except ImportError:
+    pass
+
 LOG_PATH = os.path.expanduser('~/.local/share/wacom_ff/service.log')
 if not os.path.isdir(os.path.dirname(LOG_PATH)):
     os.makedirs(os.path.dirname(LOG_PATH))
