@@ -125,6 +125,7 @@ class WacomService:
         self.options = args
         self.every = args.every
         self.device = args.device
+        self.always_poll = args.always_poll
 
     def start(self):
         """Start the service."""
@@ -148,7 +149,7 @@ class WacomService:
     def poll(self, sig: int = None, _: FrameType = None):
         """Set the drawing area."""
         logger.debug('Caught signal %s', SIGNALS.get(sig, sig))
-        if sig == signal.SIGPOLL:
+        if sig == signal.SIGPOLL or self.always_poll:
             logger.info('Reloading monitor config')
             try:
                 self.monitor_config = get_xrandr_monitor_data()
@@ -177,6 +178,8 @@ ap.add_argument('--every', type=int, default=0, metavar='N',
 ap.add_argument('--log-level', type=int, default=20,
                 help='Set log level (high values mean quiet operation)')
 ap.add_argument('--device', required=True, help='Which wacom device to handle')
+ap.add_argument('--always-poll', action='store_true',
+                help='Wether to always reload the monitor configuration (slower)')
 
 
 if __name__ == '__main__':
