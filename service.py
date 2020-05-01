@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from argparse import ArgumentParser, Namespace
 import logging
 import os
