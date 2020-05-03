@@ -25,9 +25,16 @@ logger = logging.getLogger('wacom_ff')
 SIGNALS = {getattr(signal, a): a for a in dir(signal) if bool(re.match('SIG[^_]', a))}
 
 
+XRANDR_MONITORS_LINE_RE = re.compile(r'\s*(?P<id_num>\d+): (?:\+|.)(?P<name_1>.+) (?P<width_px>\d+)'
+                                     r'/(?P<width_phys>\d+)x(?P<height_px>\d+)/(?P<height_phys>\d+)'
+                                     r'\+(?P<x_offset>\d+)\+(?P<y_offset>\d+)\s+(?P<name>.+)')
+
+
 def xdotool_get_cursor_position():
     """Get the position of the mouse."""
+    s = time.time()
     r, output = getstatusoutput('xdotool getmouselocation')
+    logger.debug('ran "xdotool getmouselocation" in %.3f s', time.time() - s)
     if r:
         raise ValueError(f'xdotool exited with code {r}', output)
     m = re.fullmatch(r'x:(?P<x>\d+) y:(?P<y>\d+) screen:(?P<screen>\d+)'
@@ -63,6 +70,11 @@ class MonitorDummy:
         self.width_phys, self.height_phys = width_phys, height_phys
         self.x_offset, self.y_offset = x_offset, y_offset
 
+    def __str__(self):
+        return (f'<Monitor name={self.name} w={self.width_px}px={self.width_phys}phys '
+                f'h={self.height_px}px={self.height_phys}phys xoffset={self.x_offset}px '
+                f'yoffset={self.y_offset}px />')
+
     @property
     def x_range(self):
         "Return horizontal pixel range."
@@ -85,6 +97,11 @@ class MonitorConfiguration:
     def __len__(self):
         return len(self.monitors)
 
+    def __str__(self):
+        return ('<MonitorConfiguration>\n  '
+                + '\n  '.join(map(str, self.monitors))
+                + '\n</MonitorConfiguration>')
+
     def get_monitor_from_position(self, position: tuple = None):
         """Return the monitor on which the mouse currently is."""
         if position is None:
@@ -97,18 +114,17 @@ class MonitorConfiguration:
 
 
 def get_xrandr_monitor_data():
-    line_re = (r'\s*(?P<id_num>\d+): (?:\+|.)(?P<name_1>.+) (?P<width_px>\d+)'
-               r'/(?P<width_phys>\d+)x(?P<height_px>\d+)/(?P<height_phys>\d+)'
-               r'\+(?P<x_offset>\d+)\+(?P<y_offset>\d+)\s+(?P<name>.+)')
     intify = {'id_num', 'width_px', 'height_px', 'x_offset', 'y_offset'}
     floatify = {'width_phys', 'height_phys'}
+    s = time.time()
     r, output = getstatusoutput('xrandr --listactivemonitors')
+    logger.debug('ran "xrandr --listactivemonitors" in %.3f s', time.time() - s)
     if r:
         raise ValueError(f'xrandr failed with code {r}', output)
     lines = list(map(str.strip, output.split('\n')))
     out = {}
     for l in lines:
-        m = re.fullmatch(line_re, l)
+        m = XRANDR_MONITORS_LINE_RE.fullmatch(l)
         if not m:
             continue
         d = m.groupdict()
@@ -127,7 +143,7 @@ class WacomService:
         try:
             self.monitor_config = get_xrandr_monitor_data()
         except Exception as e:
-            logger.critical("Failed to get monitor config: %r", e)
+            logger.critical('Failed to get monitor config: %r', e)
             sys.exit(1)
         self.options = args
         self.every = args.every
@@ -155,20 +171,21 @@ class WacomService:
 
     def poll(self, sig: int = None, _: FrameType = None):
         """Set the drawing area."""
+        s = time.time()
         logger.debug('Caught signal %s', SIGNALS.get(sig, sig))
         if sig == signal.SIGPOLL or self.always_poll:
             logger.info('Reloading monitor config')
-            try:
-                self.monitor_config = get_xrandr_monitor_data()
-            except Exception:
-                logger.error('Failed to load monitor config!')
+            if not self.reload_monitor_config():
+                logger.warning('Discarding poll event because the monitor config could not be '
+                               'reloaded!')
                 return
         if len(self.monitor_config) < 2:
             logger.warning('Only one monitor found! Ignoring event!')
             return
         m = self.monitor_config.get_monitor_from_position()
         if m is None:
-            logger.error('Could not determine the focussed monitor!')
+            logger.error('Could not determine the focussed monitor! Reloading monitor config.')
+            self.reload_monitor_config()
             return
         cmd = 'xsetwacom set %r MapToOutput %r' % (self.device, m.name)
         logger.debug('Running %s', cmd)
@@ -177,6 +194,16 @@ class WacomService:
             logger.error('xsetwacom exited with code %r: %s', r, o)
         if self.every > 0:
             signal.alarm(self.every)
+        logger.debug('Poll handling took %.3f s', time.time() - s)
+
+    def reload_monitor_config(self) -> bool:
+        try:
+            self.monitor_config = get_xrandr_monitor_data()
+            logger.info('Monitor config reloaded:\n%s', self.monitor_config)
+            return True
+        except Exception:
+            logger.error('Failed to load monitor config!')
+            return False
 
 
 ap = ArgumentParser(prog='wacom_ff', conflict_handler='resolve')
